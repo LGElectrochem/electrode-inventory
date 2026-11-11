@@ -120,7 +120,7 @@ function makeRow(v) {
   row.appendChild(el('div', { 'class': 'row-head' }, [el('span', { 'class': 'num' }), el('span', { 'class': 'actions' }, [copyBtn, delBtn])]));
 
   var size = el('input', { 'data-k': 'size', placeholder: 'e.g. 3 mm' }); size.value = v.size || '';
-  var notes = el('input', { 'data-k': 'notes', placeholder: 'Optional, e.g. polished last week, chip in the glass' }); notes.value = v.notes || '';
+  var notes = el('input', { 'data-k': 'notes', placeholder: 'Optional' }); notes.value = v.notes || '';
   var qty = el('input', { 'data-k': 'qty', type: 'number', min: '1', step: '1', inputmode: 'numeric' }); qty.value = v.qty || 1;
 
   var std = el('div', { 'class': 'grp-std' }, [
