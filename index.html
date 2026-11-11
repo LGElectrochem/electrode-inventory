@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Group Electrode Inventory</title>
+<style>
+  :root { --ink:#1d2330; --muted:#667085; --line:#d7dce3; --bg:#f5f6f8; --accent:#2f5bd3; --bad:#c62828; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  .wrap { max-width:1100px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  .intro { color:var(--muted); margin:0 0 20px; max-width:720px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+  label.f { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  input, select { font:inherit; color:var(--ink); padding:8px 9px; border:1px solid var(--line); border-radius:7px; background:#fff; width:100%; min-width:0; }
+  input:focus, select:focus { outline:2px solid #c9d6f7; border-color:var(--accent); }
+  .invalid { border-color:var(--bad) !important; background:#fff6f6; }
+  .name { max-width:340px; }
+  .row-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .num { font-weight:700; }
+  .actions button { font:inherit; font-size:13px; border:1px solid var(--line); background:#fff; border-radius:6px; padding:4px 10px; cursor:pointer; color:var(--muted); margin-left:6px; }
+  .actions button:hover { color:var(--ink); border-color:#aab3c0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 12px; }
+  .other { margin-top:4px; }
+  .wide { grid-column:1 / -1; }
+  .bar { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:16px; }
+  .btn { font:inherit; font-weight:600; border-radius:8px; padding:10px 18px; cursor:pointer; border:1px solid var(--accent); }
+  .btn.add { background:#fff; color:var(--accent); }
+  .btn.go { background:var(--accent); color:#fff; }
+  .btn:disabled { opacity:.6; cursor:default; }
+  .msg { color:var(--bad); font-weight:600; }
+  .done { text-align:center; padding:40px 16px; }
+  .done h2 { margin:0 0 8px; }
+  .hint { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <h1>Group Electrode Inventory</h1>
+  <div class="card done" id="done" style="display:none">
+    <h2 id="doneTitle"></h2><p id="doneText"></p>
+    <button class="btn go" id="again" type="button">Enter more electrodes</button>
+  </div>
+  <div id="form">
+  <p class="intro">One row per electrode, or per set of identical ones (put the number in Qty). Use <b>Copy</b> to duplicate a row when the next electrode is similar. Skip single-use consumables like pulled pipettes. "Not sure" is always a fine answer.</p>
+
+  <div class="card">
+    <label class="f name">Your name<input id="name" autocomplete="name" placeholder="First and last name"></label>
+  </div>
+
+  <div id="rows"></div>
+
+  <div class="bar">
+    <button class="btn add" id="add" type="button">+ Add another electrode</button>
+    <button class="btn go" id="submit" type="button">Submit all</button>
+    <span class="msg" id="msg"></span>
+  </div>
+  </div>
+</div>
+
+<script>
+var O = {
+  role: ['Working', 'Counter', 'Reference', 'Other'],
+  material: ['Platinum', 'Gold', 'Glassy carbon', 'Boron-doped diamond', 'Carbon fibre', 'Graphite or HOPG', 'Silver', 'Palladium', 'Pt alloy (PtIr, PtRu etc.)', 'Nickel', 'Copper', 'Stainless steel', 'ITO or FTO', 'Not sure'],
+  format: ['Disc in a shroud', 'RDE or RRDE tip', 'Microelectrode (≤25 µm)', 'Wire', 'Mesh or gauze', 'Foil, plate or sheet', 'Rod', 'Single crystal', 'Thin film or chip', 'Screen-printed', 'Not sure'],
+  refType: ['Ag/AgCl', 'Saturated calomel (SCE)', 'Hg/Hg₂SO₄', 'Hg/HgO', 'Reversible hydrogen (RHE)', 'Leakless or mini Ag/AgCl', 'Not sure'],
+  fill: ['Saturated KCl', '3 M KCl', 'Saturated K₂SO₄', 'KOH or NaOH', 'H₂SO₄', 'Not applicable', 'Not sure'],
+  maker: ['ALS / BASi', 'CH Instruments', 'Metrohm', 'Pine Research', 'IJ Cambria', 'Element Six', 'Goodfellow', 'Made in-house', 'Not sure'],
+  access: ['Yes, just put it back', 'Ask me first', 'No, reserved for my work', "It's spare, take it"]
+};
+var ENDPOINT = 'https://script.google.com/macros/s/AKfycbwvV8fpSKuGzKWgTEMjF8dj580K9HJF-SFefwpXDIhL3PrrxuvqmKXcqGqQUb87RuM/exec';
+var OTHER = '__other__';
+var rowsEl = document.getElementById('rows');
+
+function el(tag, attrs, kids) {
+  var e = document.createElement(tag);
+  for (var k in (attrs || {})) { if (k === 'text') e.textContent = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  (kids || []).forEach(function (c) { if (c) e.appendChild(c); });
+  return e;
+}
+
+// A select, optionally with an "Other..." choice that reveals a text box.
+function pick(key, opts, val, withOther, placeholder) {
+  var s = el('select', { 'data-k': key });
+  s.appendChild(el('option', { value: '', text: placeholder || 'Choose' }));
+  opts.forEach(function (o) { s.appendChild(el('option', { value: o, text: o })); });
+  var other = null;
+  if (withOther) {
+    s.appendChild(el('option', { value: OTHER, text: 'Other…' }));
+    other = el('input', { 'class': 'other', 'data-k': key + '_other', placeholder: 'Type it' });
+    other.style.display = 'none';
+    s.addEventListener('change', function () {
+      other.style.display = s.value === OTHER ? '' : 'none';
+      if (s.value === OTHER) other.focus();
+    });
+  }
+  if (val) {
+    if (opts.indexOf(val) >= 0) s.value = val;
+    else if (withOther) { s.value = OTHER; other.value = val; other.style.display = ''; }
+  }
+  var box = el('div', {}, [s, other]);
+  return box;
+}
+
+function field(label, control, extra) { return el('label', { 'class': 'f' + (extra ? ' ' + extra : '') }, [document.createTextNode(label), control]); }
+
+function readPick(row, key) {
+  var s = row.querySelector('select[data-k="' + key + '"]');
+  if (!s) return '';
+  if (s.value === OTHER) return row.querySelector('input[data-k="' + key + '_other"]').value.trim();
+  return s.value;
+}
+
+function makeRow(v) {
+  v = v || {};
+  var row = el('div', { 'class': 'card row' });
+  var copyBtn = el('button', { type: 'button', text: 'Copy' });
+  var delBtn = el('button', { type: 'button', text: 'Remove', title: 'Remove this electrode' });
+  row.appendChild(el('div', { 'class': 'row-head' }, [el('span', { 'class': 'num' }), el('span', { 'class': 'actions' }, [copyBtn, delBtn])]));
+
+  var size = el('input', { 'data-k': 'size', placeholder: 'e.g. 3 mm' }); size.value = v.size || '';
+  var notes = el('input', { 'data-k': 'notes', placeholder: 'Optional, e.g. polished last week, chip in the glass' }); notes.value = v.notes || '';
+  var qty = el('input', { 'data-k': 'qty', type: 'number', min: '1', step: '1', inputmode: 'numeric' }); qty.value = v.qty || 1;
+
+  var std = el('div', { 'class': 'grp-std' }, [
+    field('Material', pick('material', O.material, v.material, true)),
+    field('Format', pick('format', O.format, v.format, true)),
+    field('Size', size)
+  ]);
+  var ref = el('div', { 'class': 'grp-ref' }, [
+    field('Reference type', pick('refType', O.refType, v.refType, true)),
+    field('Filling solution', pick('fill', O.fill, v.fill, true, 'Optional'))
+  ]);
+  var roleBox = pick('role', O.role, v.role, false);
+  var grid = el('div', { 'class': 'grid' }, [
+    field('Role', roleBox), std, ref,
+    field('Qty', qty),
+    field('Maker', pick('maker', O.maker, v.maker, true, 'Optional')),
+    field('Others can use it?', pick('access', O.access, v.access || 'Ask me first', false)),
+    field('Notes', notes, 'wide')
+  ]);
+  row.appendChild(grid);
+
+  var roleSel = roleBox.querySelector('select');
+  function sync() {
+    var isRef = roleSel.value === 'Reference';
+    std.style.display = isRef ? 'none' : 'contents';
+    ref.style.display = isRef ? 'contents' : 'none';
+  }
+  roleSel.addEventListener('change', sync); sync();
+
+  copyBtn.addEventListener('click', function () {
+    var copy = makeRow(readRow(row));
+    rowsEl.insertBefore(copy, row.nextSibling); renumber();
+    copy.querySelector('select').focus();
+  });
+  delBtn.addEventListener('click', function () {
+    if (rowsEl.children.length === 1) { rowsEl.replaceChild(makeRow(), row); }
+    else rowsEl.removeChild(row);
+    renumber();
+  });
+  row.addEventListener('input', function (e) { e.target.classList.remove('invalid'); });
+  row.addEventListener('change', function (e) { e.target.classList.remove('invalid'); });
+  return row;
+}
+
+function readRow(row) {
+  return {
+    role: readPick(row, 'role'), material: readPick(row, 'material'), format: readPick(row, 'format'),
+    size: row.querySelector('[data-k="size"]').value.trim(),
+    refType: readPick(row, 'refType'), fill: readPick(row, 'fill'),
+    qty: row.querySelector('[data-k="qty"]').value, maker: readPick(row, 'maker'), access: readPick(row, 'access'),
+    notes: row.querySelector('[data-k="notes"]').value.trim()
+  };
+}
+
+function renumber() {
+  Array.prototype.forEach.call(rowsEl.children, function (r, i) { r.querySelector('.num').textContent = 'Electrode ' + (i + 1); });
+  var only = rowsEl.children.length === 1;
+  Array.prototype.forEach.call(rowsEl.querySelectorAll('.actions button:last-child'), function (b) { b.textContent = only ? 'Clear' : 'Remove'; });
+}
+
+function addRow() { var r = makeRow(); rowsEl.appendChild(r); renumber(); return r; }
+
+function flag(node) { if (node) node.classList.add('invalid'); return node; }
+
+function validate() {
+  var first = null, data = [];
+  var nameEl = document.getElementById('name');
+  if (!nameEl.value.trim()) first = flag(nameEl);
+  Array.prototype.forEach.call(rowsEl.children, function (row) {
+    var d = readRow(row), isRef = d.role === 'Reference';
+    function need(key, ok) {
+      if (ok) return;
+      var s = row.querySelector('select[data-k="' + key + '"]');
+      var bad = (s && s.value === OTHER) ? row.querySelector('input[data-k="' + key + '_other"]') : (s || row.querySelector('[data-k="' + key + '"]'));
+      flag(bad); if (!first) first = bad;
+    }
+    need('role', d.role);
+    if (isRef) { need('refType', d.refType); d.material = d.format = d.size = ''; }
+    else { need('material', d.material); need('format', d.format); need('size', d.size); d.refType = d.fill = ''; }
+    need('qty', parseInt(d.qty, 10) >= 1);
+    need('access', d.access);
+    data.push(d);
+  });
+  return { first: first, rows: data, name: nameEl.value.trim() };
+}
+
+document.getElementById('add').addEventListener('click', function () { addRow().querySelector('select').focus(); });
+
+document.getElementById('submit').addEventListener('click', function () {
+  var msg = document.getElementById('msg'); msg.textContent = '';
+  var v = validate();
+  if (v.first) { msg.textContent = 'Fill in the highlighted boxes (use "Not sure" if you need to).'; v.first.scrollIntoView({ block: 'center' }); v.first.focus(); return; }
+  var btn = this; btn.disabled = true; btn.textContent = 'Saving…';
+  try { localStorage.setItem('electrodeName', v.name); } catch (e) {}
+  fetch(ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ name: v.name, rows: v.rows }) })
+    .then(function (r) { return r.json(); })
+    .then(function (res) { if (!res.ok) throw new Error(res.error || 'Unknown error'); showDone(res.n, v.name); })
+    .catch(function (err) { btn.disabled = false; btn.textContent = 'Submit all'; msg.textContent = 'Could not save (' + (err && err.message ? err.message : err) + '). Please try again.'; });
+});
+
+function showDone(n, name) {
+  document.getElementById('form').style.display = 'none';
+  document.getElementById('doneTitle').textContent = 'Thanks, ' + name.split(' ')[0] + '!';
+  document.getElementById('doneText').textContent = n + ' electrode ' + (n === 1 ? 'entry' : 'entries') + ' saved.';
+  document.getElementById('done').style.display = '';
+  window.scrollTo(0, 0);
+}
+
+document.getElementById('again').addEventListener('click', function () {
+  rowsEl.innerHTML = ''; addRow();
+  var btn = document.getElementById('submit'); btn.disabled = false; btn.textContent = 'Submit all';
+  document.getElementById('done').style.display = 'none';
+  document.getElementById('form').style.display = '';
+});
+
+try { var saved = localStorage.getItem('electrodeName'); if (saved) document.getElementById('name').value = saved; } catch (e) {}
+addRow();
+</script>
+</body>
+</html>
